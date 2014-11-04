@@ -1,0 +1,220 @@
+#include <cstdlib>
+#include <deque>
+#include <iostream>
+#include <list>
+#include <set>
+#include <memory>
+#include <utility>
+#include <boost/asio.hpp>
+#include <boost/bind.hpp>
+#include <boost/shared_ptr.hpp>
+#include <boost/enable_shared_from_this.hpp>
+#include "message.hpp"
+
+using boost::asio::ip::tcp;
+
+typedef std::deque<message> message_queue;
+
+class participant
+{
+public:
+	virtual ~participant() {}
+	virtual void deliver( const message& msg ) = 0;
+};
+
+typedef boost::shared_ptr<participant> participant_ptr;
+
+class chat_room
+{
+public:
+	void join(participant_ptr participant)
+	{
+		participants_.insert(participant);
+		for (auto msg: recent_msgs_)
+			participant->deliver(msg);
+	}
+
+	void leave(participant_ptr participant)
+	{
+		participants_.erase(participant);
+	}
+
+	void deliver(const message& msg)
+	{
+		recent_msgs_.push_back(msg);
+		while(recent_msgs_.size() > max_recent_messages)
+			recent_msgs_.pop_front();
+
+		for (auto participant : participants_)
+			participant->deliver(msg);
+	}
+
+private:
+	std::set<participant_ptr> participants_;
+	enum {max_recent_messages = 100};
+	message_queue recent_msgs_;
+};
+
+class chat_session : public participant,
+public boost::enable_shared_from_this<chat_session>
+{
+public:
+	chat_session(tcp::socket socket, chat_room& room)
+	: socket_(std::move(socket)), room_(room)
+	{}
+
+	void start()
+	{
+		room_.join(shared_from_this());
+		read_header();
+	}
+
+	void deliver(const message& msg)
+	{
+		bool write_in_progress = !write_msgs_.empty();
+		write_msgs_.push_back(msg);
+		if (!write_in_progress)
+		{
+		  write();
+		}
+	}
+
+private:
+	tcp::socket socket_;
+	chat_room& room_;
+	message read_message_;
+	message_queue write_msgs_;
+
+	void read_header()
+	{
+		auto self(shared_from_this());
+		boost::asio::async_read(socket_,
+		boost::asio::buffer(read_message_.data(), read_message_.length()),
+		[this, self] (boost::system::error_code ec, std::size_t /*length*/)
+		{
+			if(!ec && read_message_.decode_header())
+				read_body();
+			else
+				room_.leave(shared_from_this());
+		});
+	}
+
+	void read_body()
+	{
+		auto self(shared_from_this());
+		boost::asio::async_read(socket_,
+		boost::asio::buffer(read_message_.data(), read_message_.length()),
+		[this, self] (boost::system::error_code ec, std::size_t /*lenght*/)
+		{
+			if (!ec)
+			{
+				room_.deliver(read_message_);
+				read_header();
+			}
+			else
+				room_.leave(shared_from_this());
+		});
+	}
+
+	void write()
+	{
+		auto self(shared_from_this());
+		boost::asio::async_write(socket_,
+		boost::asio::buffer(write_msgs_.front().data(), write_msgs_.front().length()),
+		[this, self] (boost::system::error_code ec, std::size_t /*length*/)
+		{
+			if(!ec)
+			{
+				write_msgs_.pop_front();
+				if (!write_msgs_.empty())
+					write();
+				else
+					room_.leave(shared_from_this());
+			}
+		});
+	}
+};
+
+class chat_server
+{
+public:
+
+	chat_server(boost::asio::io_service& io_service, int port)
+	: acceptor_(io_service, tcp::endpoint(tcp::v4(), port)), socket_(io_service)
+	{
+		do_accept();
+	}
+
+private:
+
+	tcp::acceptor acceptor_;
+	tcp::socket socket_;
+	chat_room room_;
+
+	void do_accept()
+	{
+		std::cout << " do_accept \n";
+		acceptor_.async_accept(socket_,
+			[this](boost::system::error_code ec)
+			{
+			std::cout << " do_accept lambda \n";
+				if (!ec)
+				{
+					std::cout << " do_accept lambda if \n";
+					std::shared_ptr<chat_session> chat_session_ = std::make_shared<chat_session>(std::move(socket_), room_);
+					std::cout << " do_accept lambda if start\n";
+					chat_session_->start();
+				}
+				std::cout << " do_accept lambda \n";
+				do_accept();
+			});
+	}
+};
+
+int main(int argc, char** argv)
+{
+
+	if (argc < 2)
+	{
+		std::cerr << "Usage: chat_server <port> [<port> ... ] \n";
+		return 1;
+	}
+
+	try {
+		boost::asio::io_service io_service;
+
+		std::list<chat_server> servers;
+
+		for (int i=1; i < argc; ++i)
+		{
+			servers.emplace_back(io_service, std::atoi(argv[i]));
+			// TODO what's the hell that?
+		}
+
+		io_service.run();
+	}
+	catch (std::exception& e)
+	{
+		std::cerr << "Exception: " << e.what() << "\n";
+	}
+
+	return 0;
+}
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
