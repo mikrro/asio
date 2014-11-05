@@ -78,7 +78,8 @@ private:
 				{
 					if(!ec)
 					{
-						std::cout.write(read_message_.body(), read_message_.body_length());
+						std::cout << "[client::do_read_message] " << read_message_.body() << "\n";
+			            std::cout.write(read_message_.body(), read_message_.body_length());
 						std::cout << "\n";
 						do_read_header();
 					}
@@ -96,6 +97,7 @@ private:
 				{
 					if(!ec)
 					{
+						std::cout << "[client::do_write] " << write_msgs_.front().body() << "\n";
 						write_msgs_.pop_front();
 						if(!write_msgs_.empty())
 							do_write();
@@ -136,6 +138,7 @@ int main(int argc, char** argv)
 			msg.body_length(std::strlen(line));
 			std::memcpy(msg.body(), line, msg.body_length());
 			msg.encode_header();
+			c.write(msg);
 		}
 		t.join();
 		c.close();

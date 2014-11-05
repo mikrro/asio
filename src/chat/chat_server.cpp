@@ -22,7 +22,7 @@ public:
 	virtual void deliver( const message& msg ) = 0;
 };
 
-typedef boost::shared_ptr<participant> participant_ptr;
+typedef std::shared_ptr<participant> participant_ptr;
 
 class chat_room
 {
@@ -56,7 +56,7 @@ private:
 };
 
 class chat_session : public participant,
-public boost::enable_shared_from_this<chat_session>
+public std::enable_shared_from_this<chat_session>
 {
 public:
 	chat_session(tcp::socket socket, chat_room& room)
@@ -75,7 +75,7 @@ public:
 		write_msgs_.push_back(msg);
 		if (!write_in_progress)
 		{
-		  write();
+		  do_write();
 		}
 	}
 
@@ -89,9 +89,11 @@ private:
 	{
 		auto self(shared_from_this());
 		boost::asio::async_read(socket_,
-		boost::asio::buffer(read_message_.data(), read_message_.length()),
+		boost::asio::buffer(read_message_.data(), message::header_length),
 		[this, self] (boost::system::error_code ec, std::size_t /*length*/)
 		{
+			std::cout << "[server::read_header] " << read_message_.body() << "\n";
+
 			if(!ec && read_message_.decode_header())
 				read_body();
 			else
@@ -108,6 +110,7 @@ private:
 		{
 			if (!ec)
 			{
+				std::cout << "[server::read_body] " << read_message_.body() << "\n";
 				room_.deliver(read_message_);
 				read_header();
 			}
@@ -116,7 +119,7 @@ private:
 		});
 	}
 
-	void write()
+	void do_write()
 	{
 		auto self(shared_from_this());
 		boost::asio::async_write(socket_,
@@ -125,9 +128,10 @@ private:
 		{
 			if(!ec)
 			{
+				std::cout << "[server::do_write]" << write_msgs_.front().body() << "\n";
 				write_msgs_.pop_front();
 				if (!write_msgs_.empty())
-					write();
+					do_write();
 				else
 					room_.leave(shared_from_this());
 			}
@@ -153,19 +157,14 @@ private:
 
 	void do_accept()
 	{
-		std::cout << " do_accept \n";
 		acceptor_.async_accept(socket_,
 			[this](boost::system::error_code ec)
 			{
-			std::cout << " do_accept lambda \n";
 				if (!ec)
 				{
-					std::cout << " do_accept lambda if \n";
-					std::shared_ptr<chat_session> chat_session_ = std::make_shared<chat_session>(std::move(socket_), room_);
-					std::cout << " do_accept lambda if start\n";
-					chat_session_->start();
+					std::make_shared<chat_session>(std::move(socket_), room_)->start();
+
 				}
-				std::cout << " do_accept lambda \n";
 				do_accept();
 			});
 	}
